@@ -11,7 +11,8 @@ print "Importing modules"
 
 # ultimately we want to make this a function, with the following input information:
 folderPath = u'/Users/wiar9509/git/pySwath'
-inPoly='/test/testMultiLine.shp' # input shapefile filename along which raster will be sampled
+#inPoly='/test/testMultiLine.shp' # input shapefile filename along which raster will be sampled
+inPoly='/test/test9.shp' # input shapefile filename along which raster will be sampled
 inRast='/test/vv.tif' # input raster filename to sample
 width=500.0 # across-flow box dimension [this is in the units of the projection]
 height=150.0 # along-flow box dimension
@@ -212,7 +213,7 @@ for lineNo in range(numLines):
 	
 	# Read in stats file
 	print 'Reading in statistics file and updating shapefile'
-	statsFile=np.genfromtxt(outTextFilename,delimiter=',',skip_header=1)
+	statsFile=np.genfromtxt(outTextFn,delimiter=',',skip_header=1)
 	statsLen=len(statsFile)
 
 	# Opening layer to populate stats values in shapefile created above
