@@ -10,10 +10,14 @@ print "Importing modules"
 ##### USER DEFINED VARIABLES ######
 
 # ultimately we want to make this a function, with the following input information:
-folderPath = u'/Users/wiar9509/git/pySwath'
+folderPath='/Users/wiar9509/git/pySwath/'
 #inPoly='/test/testMultiLine.shp' # input shapefile filename along which raster will be sampled
-inPoly='/test/test9.shp' # input shapefile filename along which raster will be sampled
-inRast='/test/vv.tif' # input raster filename to sample
+#inPoly='test9.shp' # input shapefile filename along which raster will be sampled
+inPoly='wrangellsTransectsUtm7n.shp' # input shapefile filename along which raster will be sampled
+#inRast='vv.tif' # input raster filename to sample
+inRast='LC80640172013166LGN0_LC80640172014137LGN0_2013-334_336_20_69_hp_filt_3.0_vv.tif'
+#inRast='LC80640172013166LGN0_LC80640172013214LGN0_2013-190_48_20_69_hp_filt_3.0_vv.tif'
+#inRast='wrangells_gdem.tif'
 width=500.0 # across-flow box dimension [this is in the units of the projection]
 height=150.0 # along-flow box dimension
 
@@ -21,23 +25,33 @@ height=150.0 # along-flow box dimension
 ###### LOADING MODULES ######
 
 import os
+import sys
 os.chdir(folderPath)
 import numpy as np
 from krb_vecTools import *
-#import matplotlib.pyplot as plt
 import scipy as sci 
 import grass.script as grass
-
-from osgeo import ogr # modify code to just use ogr, not arcGIS
+from osgeo import ogr
 from osgeo import osr
-
 
 ###### PROCESSING ######
 
+# Prepare outputs
 outTextSuffix='stats.csv' # filename suffix for textfile output
 figOutSuffix='statsFig.pdf' # filename suffix for figure output
+#inRastOut=inRast[0:len(inRast)-4] # trim the .tif from filename
+rastSplit=inRast.split('_') # break up input raster string
+masterImage=rastSplit[0]
+slaveImage=rastSplit[1]
 
-# create the spatial reference
+# Create output folder structure if it doesn't exist
+if not os.path.exists(folderPath+'/swathOutputs/'):
+	os.mkdir('swathOutputs')
+	os.mkdir('swathOutputs/textfiles')
+	os.mkdir('swathOutputs/figures')
+	os.mkdir('swathOutputs/shapefiles')
+
+# Create the spatial reference
 srs = osr.SpatialReference()
 srs.ImportFromEPSG(32607) # This hard-coded to UTM 7N w/ WGS84 datum. Would be nice to have this defined based of input shapefile
 
@@ -48,6 +62,25 @@ dataSource = driver.Open(shapefile, 0)
 layer = dataSource.GetLayer()
 crs = layer.GetSpatialRef() # Coordinate reference system
 
+# Changing filepath so GRASS won't balk. OGR needs it a different way it seems. Just need to trim the starting 'u' before filepath
+if not folderPath[0]=='/' and folderPath[1]=='/':
+	pathLen=len(folderPath)
+	grassPath=folderPath[1:pathLen]
+else:
+	grassPath=folderPath
+
+print "Checking projection compatibility between polylines and raster"
+# Read raster projection
+rastProj=grass.parse_command("g.proj",flags='j',georef=grassPath+inRast)
+# Read polyline projection
+polyProj=grass.parse_command("g.proj",flags='j',georef=grassPath+inPoly)
+
+if rastProj.values()[4]==polyProj.values()[4] and rastProj.values()[6]==polyProj.values()[6]:
+	print 'Raster and polylines have matching projection'
+else:
+	print 'Raster and polylines DO NOT have matching projection, terminating script'
+	sys.exit(1)
+
 numLines=layer.GetFeatureCount() # Number of lines in shapefile
 
 # Iterating over number of lines in input shapefile
@@ -57,60 +90,60 @@ for lineNo in range(numLines):
 	lineEast=[]
 	lineNorth=[]
 	dE=[]
- 	dN=[]
- 	sampleEast=[]
- 	sampleNorth=[]
- 	ptArray=[]
- 	
- 	feat=layer.GetFeature(lineNo) # Highlights current line
+	dN=[]
+	sampleEast=[]
+	sampleNorth=[]
+	ptArray=[]
+
+	feat=layer.GetFeature(lineNo) # Highlights current line
 	geom=feat.geometry()
 	name=feat.GetField(1) # Gets current line name
-	
-	outTextFn=folderPath+'/'+name+'_'+outTextSuffix
-	
+
+	outTextFn=folderPath+'/swathOutputs/textfiles/'+name+'_'+masterImage+'_'+slaveImage+'_'+outTextSuffix
+
 	print "PROCESSING TRANSECT "+name.upper()
 	print "TRANSECT "+str(lineNo+1)+" OF "+str(numLines)
 	print "Getting coordinates along line"
-	
+
 	numPoints=geom.GetPointCount() # Number of vertices in polyline
-	
+
 	for nP in range(numPoints): # Iterates over points and appends x,y (easting, northing) coords from current line
 		lineEast.append(geom.GetPoint(nP)[0]) # change in easting from last coordinate [m]
 		lineNorth.append(geom.GetPoint(nP)[1]) # change in northing from last coordinate [m]
 		if nP > 0: # Calculates difference in easting/northing between points for later line length calculation
 			dE.append(lineEast[nP]-lineEast[nP-1])
 			dN.append(lineNorth[nP]-lineNorth[nP-1])
-	
+
 	# Converting to arrays to do math
 	dE=np.array(dE)
 	dN=np.array(dN)
-	
+
 	# Finding centroid coordinates for sampling
 	lineSegs=len(dE) # number of line segments
 	segmentLen=np.sqrt(dE**2 + dN**2) # units same as projection
 	pointsInSeg=np.ceil(segmentLen/height)
 	dEseg=dE/pointsInSeg
 	dNseg=dN/pointsInSeg
-	
+
 	# Iterate over line segments to generate coordinates
 	for segNo in range(lineSegs):
 		index=np.linspace(1,pointsInSeg[segNo]+1,pointsInSeg[segNo]+1) # list from 1 to number of sampling points in line segment
 		sampleEast.append(lineEast[segNo]+dEseg[segNo]*index)
 		sampleNorth.append(lineNorth[segNo]+dNseg[segNo]*index)
 		#plt.plot(sampleEast[segNo],sampleNorth[segNo],'.')
-		
+	
 	# Was in a weird format before because of segNo loop. This makes it a better array
 	sampleEast=np.concatenate(sampleEast,axis=0)
 	sampleNorth=np.concatenate(sampleNorth,axis=0)
-	
+
 	# Converting from array to list
 	sampleEast=sampleEast.tolist()
 	sampleNorth=sampleNorth.tolist()
-	
+
 	# Putting easting and northing coordinates together into a list of lists
 	for coord in range(len(sampleEast)):
 		ptArray.append((sampleEast[coord],sampleNorth[coord]))
-	
+
 	# Vectools to generate polygons (rectangles) for zonal stats 
 	print "Calculating the slope and perpendicular slope along the line"
 	hwin=5
@@ -123,19 +156,19 @@ for lineNo in range(numLines):
 	# Format of polygon coordinates is lower right (LR), LL, UL, UR
 
 	#calculate distance along the line
- 	lineDist=distanceAlongLine(sampleEast,sampleNorth)
-	
-	
+	lineDist=distanceAlongLine(sampleEast,sampleNorth)
+
+
 	### CREATING POLYGONS ###
-	
+
 	# Sourced ideas for the below lines from http://www.gis.usu.edu/~chrisg/python/2008/os2_slides.pdf as well as https://pcjericks.github.io/py-gdalogr-cookbook/
 	# Initializing
 	numBoxes=len(polygons)
 
 	print "Generating and populating polygons"
-	if os.path.exists(name+"polygons.shp"):
-		driver.DeleteDataSource(name+"polygons.shp") # error if data source already exists
-	newDataSource=driver.CreateDataSource(name+"polygons.shp")
+	if os.path.exists(folderPath+'/swathOutputs/shapefiles/'+name+"polygons.shp"):
+		driver.DeleteDataSource(folderPath+'/swathOutputs/shapefiles/'+name+"polygons.shp") # error if data source already exists
+	newDataSource=driver.CreateDataSource(folderPath+'/swathOutputs/shapefiles/'+name+"polygons.shp")
 	newLayer=newDataSource.CreateLayer(name+"polygons",srs,geom_type=ogr.wkbPolygon)
 	fieldDefn=ogr.FieldDefn('id',ogr.OFTInteger)
 	newLayer.CreateField(fieldDefn)
@@ -153,7 +186,7 @@ for lineNo in range(numLines):
 	for poly in range(numBoxes):
 		# create the feature
 		feature = ogr.Feature(newLayer.GetLayerDefn())
-		
+	
 		# Set Geometry
 		ring=ogr.Geometry(ogr.wkbLinearRing)
 		ring.AddPoint(polygons[poly][0][0],polygons[poly][0][1]) # adding easting/northing for each vertex
@@ -165,7 +198,7 @@ for lineNo in range(numLines):
 		polygon = ogr.Geometry(ogr.wkbPolygon)
 		polygon.AddGeometry(ring)
 		feature.SetGeometryDirectly(polygon)
-		
+	
 		# Setting fields
 		feature.SetField('id',poly) # id number
 		featPoly=polygon.GetGeometryRef(0) # pointer
@@ -175,10 +208,10 @@ for lineNo in range(numLines):
 		feature.SetField('north',featNorth) # northing
 		featDist=lineDist[poly]
 		feature.SetField('dist',featDist) # distance along line
-		
+	
 		# Create the feature in the layer (shapefile)
 		newLayer.CreateFeature(feature)
-		
+	
 		# Destroy the feature to free resources
 		feature.Destroy()
 
@@ -192,7 +225,7 @@ for lineNo in range(numLines):
 	# Read in raster to sample
 	grass.run_command("r.in.gdal",flags='e',overwrite=True,quiet=True,input=folderPath+inRast,output='sampleRast')
 	# Read in polygons to use as sampling bins
-	grass.run_command("v.in.ogr",overwrite=True,quiet=True,input=folderPath+'/'+name+"polygons.shp",output='samplePolys')
+	grass.run_command("v.in.ogr",overwrite=True,quiet=True,input=folderPath+'/swathOutputs/shapefiles/'+name+"polygons.shp",output='samplePolys')
 	# Make sure computational region contains polygons
 	grass.run_command("g.region",quiet=True,vec='samplePolys',res='10')
 	# Convert polygons vector into 'zone' raster for sampling
@@ -200,9 +233,9 @@ for lineNo in range(numLines):
 	# Run univariate statistics on sample raster, using zone raster to bin and populate new rows
 	grass.run_command("r.univar",overwrite=True,quiet=True,flags='t',map='sampleRast', zones='zoneRast', out=outTextFn, sep=',',)
 	# You now have a file named $outTextFilename in the folder in which this swath profiler code lives
-	
+
 	### END GRASS PORTION ###
-	
+
 	# Initializing stats
 	min=[]
 	max=[]
@@ -210,14 +243,14 @@ for lineNo in range(numLines):
 	mean=[]
 	stdDev=[]
 	sum=[]
-	
+
 	# Read in stats file
 	print 'Reading in statistics file and updating shapefile'
 	statsFile=np.genfromtxt(outTextFn,delimiter=',',skip_header=1)
 	statsLen=len(statsFile)
 
 	# Opening layer to populate stats values in shapefile created above
-	updateDatasource = driver.Open(name+"polygons.shp", update=1)
+	updateDatasource = driver.Open(folderPath+'/swathOutputs/shapefiles/'+name+"polygons.shp", update=1)
 	updateLayer = updateDatasource.GetLayer()
 
 	for line in range(statsLen): # First value of these is nan
